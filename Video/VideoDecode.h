@@ -74,7 +74,7 @@ private:
     QString m_video_path;
 
     AVCodecContext* m_avcodec_context = NULL;
-    AVFormatContext* m_avformat_context = NULL;
+    std::shared_ptr<AVFormatContext> m_avformat_context = NULL;
     SwsContext* m_sws_context = NULL;
     AVDictionary* m_options = NULL;
     // 帧缓存数据
@@ -85,6 +85,8 @@ private:
     AVFrame* m_frame_rgb = NULL;
     // 视频帧
     AVFrame* m_video_frame = NULL;
+    // 视频解码
+    const AVCodec* m_video_codec;
 
     // 视频流索引
     int m_video_stream_index = -1;
@@ -101,6 +103,8 @@ private:
     QTimer* m_timeout;
     VideoInitState m_init_state = NOTREADY;
     double m_fps;
+
+    std::shared_ptr<clz::UDPReveiver> m_udp_reveiver;
 };
 
 }

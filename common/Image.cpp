@@ -4,13 +4,13 @@
 
 ImageVk::~ImageVk()
 {
-    if (ID != VK_NULL_HANDLE)
+    if (ID != 0)
         ImGui_ImplVulkan_DeleteTexture(ID);
 }
 
 bool ImageVk::LoadFromBytearry(char *data, int size)
 {
-    if (ID != VK_NULL_HANDLE)
+    if (ID != 0)
         ImGui_ImplVulkan_DeleteTexture(ID);
     ID = 0;
     int n = 0;

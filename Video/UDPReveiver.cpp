@@ -9,11 +9,18 @@ clz::UDPReveiver::UDPReveiver(QObject *parent): QObject(parent)
     m_port = 8000;
 }
 
+void clz::UDPReveiver::update_addr(const QString &addr, int port)
+{
+    m_addr = QHostAddress(addr);
+    m_port = port;
+}
+
 void clz::UDPReveiver::init()
 {
     if(!m_socket){
         m_socket = std::make_shared<QUdpSocket>();
     }
+    m_socket->close();
     auto bind = m_socket->bind(QHostAddress::AnyIPv4,
                                m_port,
                                QUdpSocket::ShareAddress);
@@ -27,7 +34,7 @@ void clz::UDPReveiver::init()
         m_socket->setSocketOption(QAbstractSocket::ReceiveBufferSizeSocketOption,
                                   ibsibdtctr_topic_cache_size);
 
-        connect(m_socket.get(), &QUdpSocket::readyRead, this, &clz::UDPReveiver::slot_udp_info_recv);
+//        connect(m_socket.get(), &QUdpSocket::readyRead, this, &clz::UDPReveiver::slot_udp_info_recv);
     }
 }
 
@@ -35,6 +42,20 @@ QByteArray clz::UDPReveiver::data() const
 {
     return m_data;
 }
+
+void clz::UDPReveiver::clear()
+{
+    m_socket->close();
+}
+
+int clz::UDPReveiver::read_socket(QByteArray &d, int buf_size)
+{
+    d.resize(static_cast<int>(m_socket->pendingDatagramSize()));
+    auto len = m_socket->readDatagram(d.data(),buf_size,&m_addr);
+//    auto len = m_socket->read(d.data(), buf_size);
+    return len;
+}
+
 #include "common/Image.h"
 void clz::UDPReveiver::slot_udp_info_recv()
 {

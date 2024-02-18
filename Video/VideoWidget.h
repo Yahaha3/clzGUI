@@ -4,7 +4,7 @@
 #include "ClzWidgets/ClzWidget.h"
 #include "Element/ImageDrawElement.h"
 #include "VideoDecode.h"
-#include "UDPReveiver.h"
+//#include "UDPReveiver.h"
 
 namespace clz {
 class CLZGUI_EXPORT VideoWidget : public ClzWidget
@@ -28,7 +28,6 @@ private slots:
 private:
     std::shared_ptr<clz::ImageDrawElement> m_video;
     std::shared_ptr<clz::VideoDecode> m_video_decode;
-    std::shared_ptr<clz::UDPReveiver> m_udp_reveiver;
 };
 }
 

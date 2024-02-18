@@ -284,7 +284,8 @@ void QVulkanRenderer::init()
     init_info.CheckVkResultFn = check_vk_result;
     ImGui_ImplVulkan_Init(&init_info, wd_->RenderPass);
 
-    auto fontpath = clz::pre_path  + "3rdparty/font/Alibaba-PuHuiTi-Regular.ttf";
+//    auto fontpath = clz::pre_path  + "3rdparty/font/Alibaba-PuHuiTi-Regular.ttf";
+    QString fontpath = "D:/resources/Alibaba-PuHuiTi-Regular.ttf";
     io.Fonts->AddFontFromFileTTF(fontpath.toUtf8().data(), 27, NULL, io.Fonts->GetGlyphRangesChineseFull());
     {
         ImGui_ImplVulkan_CreateFontsTexture(cmdbuf);

@@ -39,7 +39,7 @@ const QString y                     = "y";
 const QString z                     = "z";
 
 const QString pre_path = "F:/develop/750.01/build/WorkProject_20230315183342/QtImGUIVk/";
-const QString database = "C:/Users/bing.liu/PhugiaOS/common/os-configpad-data.db3";
+const QString database = "D:/resources/os-configpad-data.db3";
 }
 
 #endif // CLZ_GEOMAP_GLOBAL_H

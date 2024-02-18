@@ -12,8 +12,11 @@ class UDPReveiver : public QObject
 public:
     UDPReveiver(QObject* parent = 0);
 
+    void update_addr(const QString& addr, int port);
     void init();
     QByteArray data() const;
+    void clear();
+    int read_socket(QByteArray& d, int buf_size);
 
 signals:
     void sig_video_info_decoded(uchar* data, int w, int h);

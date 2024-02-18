@@ -17,7 +17,10 @@ extern "C"
     #include <libavutil/hwcontext_qsv.h>
 }
 
-static AVPixelFormat m_hw_pix_format = AV_PIX_FMT_BGR32;
+static AVPixelFormat m_hw_pix_format = AV_PIX_FMT_CUDA;
+static qint64 frontDataLen = 3*512*1024;
+static qint64 frontRdata = 0;
+static bool   b_already_throwdata = false;
 
 void check_ffmpeg_error(int result, size_t size){
     char* error_info = new char[32];
@@ -26,14 +29,49 @@ void check_ffmpeg_error(int result, size_t size){
 }
 
 int read_udp_packet(void *opaque, uint8_t *buf, int buf_size){
-    clz::UDPReveiver *rev = reinterpret_cast<clz::UDPReveiver*>(opaque);
-    if(!rev) return -1;
 
-//    do {
-//        auto dd = rev->data();
-//        buf = (unsigned char*)dd.data();
-//        buf_size = dd.length();
-//    } while (buf_size > 1000);
+//    clz::UDPReveiver *rev = reinterpret_cast<clz::UDPReveiver*>(opaque);
+//    if(!rev) return -1;
+    static QUdpSocket udpsocket;
+//    if(!udpsocket)
+    {
+//        udpsocket = new QUdpSocket();
+        auto bind = udpsocket.bind(QHostAddress::AnyIPv4, 8000, QUdpSocket::ShareAddress);
+        if(bind){
+            udpsocket.joinMulticastGroup(QHostAddress("226.0.1.101"));
+        }
+    }
+
+    int rd_len = -1;
+
+    do {
+        QByteArray datagram;
+//        rd_len = rev->read_socket(datagram, buf_size);
+        rd_len = udpsocket.readDatagram(datagram.data(), buf_size);
+        qDebug() << "rd len: " << rd_len;
+        buf = (unsigned char*)datagram.data();
+        if(rd_len > 0){
+            if(frontRdata < frontDataLen){
+                frontRdata += rd_len;
+            } else {
+                break;
+            }
+        }
+    } while (frontRdata < frontDataLen && rd_len > 0 && !b_already_throwdata);
+
+    if(rd_len > 0 && !b_already_throwdata && frontRdata >= frontDataLen){
+        b_already_throwdata = true;
+        return -1;
+    }
+
+    if(rd_len > 0){
+        return rd_len;
+    } else{
+        frontRdata = 0;
+        b_already_throwdata = false;
+    }
+
+    return -1;
 }
 
 static AVPixelFormat _3_1_1_get_qsv_format(AVCodecContext* avctx, const enum AVPixelFormat *pix_fmts);
@@ -56,6 +94,7 @@ clz::VideoDecode::VideoDecode(QObject *parent) : QThread(parent)
     m_oheight = 600;
     m_timeout = new QTimer();
     connect(m_timeout, &QTimer::timeout, this, &clz::VideoDecode::slot_global_timeout);
+    m_udp_reveiver = std::make_shared<clz::UDPReveiver>();
     std::cout << "initialization ffmpeg [version]:" << avcodec_version() << std::endl;
 }
 
@@ -67,7 +106,7 @@ void clz::VideoDecode::run()
             msleep(100);
             continue;
         }
-        auto ret = av_read_frame(m_avformat_context, m_av_packet);
+        auto ret = av_read_frame(m_avformat_context.get(), m_av_packet);
         if( ret >= 0
         && m_av_packet->stream_index == AVMEDIA_TYPE_VIDEO){
             // 匹配视频流
@@ -100,6 +139,7 @@ void clz::VideoDecode::run()
             emit sig_video_info_decoded((unsigned char*)m_outbuffer, m_owidth, m_oheight);
             msleep(1000.0f / m_fps);
         } else {
+            check_ffmpeg_error(ret, 1024);
             msleep(1);
         }
         av_packet_unref(m_av_packet);
@@ -113,6 +153,8 @@ void clz::VideoDecode::set_video_file(const QString &path)
 
 void clz::VideoDecode::ffmpeg_init()
 {
+
+    avdevice_register_all();
     avformat_network_init();
 
     m_init_state = VideoInitState::IDLE;
@@ -121,8 +163,6 @@ void clz::VideoDecode::ffmpeg_init()
     result = _0_build_options();
     if(!result) goto error;
     m_init_state = VideoInitState::OPTION_BUILD;
-//    m_avformat_context->interrupt_callback.callback = interrupt_callback;
-//    m_avformat_context->interrupt_callback.opaque = (void*)(&m_cur_time);
 //    m_avformat_context->avio_flags |= AVIO_FLAG_NONBLOCK;
 //    m_cur_time = QTime::currentTime().addSecs(3);
     result = _1_open_input();
@@ -159,7 +199,7 @@ void clz::VideoDecode::close()
 {
     av_packet_free(&m_av_packet);
     avcodec_close(m_avcodec_context);
-    avformat_free_context(m_avformat_context);
+    avformat_free_context(m_avformat_context.get());
 }
 
 void clz::VideoDecode::update_decode_size(int w, int h)
@@ -175,6 +215,7 @@ void clz::VideoDecode::slot_global_timeout()
     if(m_init_state != VideoInitState::NOTREADY){
         switch (m_init_state) {
         default:
+            return;
         case FINISH:
             m_timeout->stop();
 //            this->start();
@@ -232,23 +273,50 @@ bool clz::VideoDecode::_0_build_options()
         av_dict_set(&m_options, "rtsp_transport", "tcp", 0);
         av_dict_set(&m_options, "stimeout", "3000000", 0);
         av_dict_set(&m_options, "max_delay", "1000000", 0);
-        av_dict_set_int(&m_options, "multiple_requests", 1, 0);
-        av_dict_set_int(&m_options, "read_ahead_limit", INT_MAX, 0);
+        av_dict_set(&m_options, "threads", "auto", 0);
+//        av_dict_set_int(&m_options, "multiple_requests", 1, 0);
+//        av_dict_set_int(&m_options, "read_ahead_limit", INT_MAX, 0);
+        av_dict_set(&m_options, "listen_timeout", "3", 0);
     }
     return true;
 }
 
 bool clz::VideoDecode::_1_open_input()
 {
-    m_avformat_context = avformat_alloc_context();
+    m_avformat_context.reset(avformat_alloc_context());
+//    m_avformat_context->interrupt_callback.callback = interrupt_callback;
+//    m_avformat_context->interrupt_callback.opaque = (void*)(&m_cur_time);
     {
         // 1, open video m_video_path.toStdString().c_str()
 #if 1
-        int avformat_open_result = avformat_open_input(&m_avformat_context, m_video_path.toStdString().c_str(), NULL, &m_options);
-        if(avformat_open_result != 0){
+        int avformat_open_result;
+        if(m_video_path.startsWith("tcp")){
+            int bufsize = 1024*400;
+
+            unsigned char* buffer = (unsigned char*)av_malloc(bufsize);
+            m_udp_reveiver->init();
+            m_avformat_context->pb = avio_alloc_context(buffer, bufsize, 0, m_udp_reveiver.get(), read_udp_packet, NULL, NULL);
+            if(m_avformat_context->pb == 0){
+                return false;
+            }
+            auto ctx = m_avformat_context.get();
+            avformat_open_result = avformat_open_input(&ctx, 0, NULL, &m_options);
+        }
+        else
+        {
+            const AVInputFormat *ifmt = av_find_input_format("h264");
+            auto uu = m_video_path.toUtf8();
+            auto ctx = m_avformat_context.get();
+            avformat_open_result = avformat_open_input(&ctx, uu.data(), ifmt, &m_options);
+        }
+        if(avformat_open_result < 0){
             //error
             check_ffmpeg_error(avformat_open_result, 1024);
             return false;
+        }
+
+        if (m_options != NULL) {
+            av_dict_free(&m_options);
         }
 #else
         int bufsize =1024 * 400;
@@ -271,20 +339,24 @@ bool clz::VideoDecode::_2_find_stream_and_decode()
 {
     {
         // 2, find video stream info
-        int avformat_find_stream_info_result = avformat_find_stream_info(m_avformat_context, NULL);
+
+        int avformat_find_stream_info_result = avformat_find_stream_info(m_avformat_context.get(), NULL);
         if(avformat_find_stream_info_result < 0){
             check_ffmpeg_error(avformat_find_stream_info_result, 1024);
+            return false;
         }
 
         // 3, find video decoder
 //        int av_stream_index = -1;
-        m_video_stream_index = -1;
-        for(int i = 0, si = m_avformat_context->nb_streams; i < si; i++){
-            if(m_avformat_context->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO){
-                m_video_stream_index = i;
-                break;
-            }
-        }
+//        const AVCodec* codec;
+//        m_video_stream_index = av_find_best_stream(m_avformat_context, AVMEDIA_TYPE_VIDEO, -1, -1, &codec, 0);
+//        for(int i = 0, si = m_avformat_context->nb_streams; i < si; i++){
+//            if(m_avformat_context->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO){
+//                m_video_stream_index = i;
+//                break;
+//            }
+//        }
+        m_video_stream_index = av_find_best_stream(m_avformat_context.get(), AVMEDIA_TYPE_VIDEO, -1, -1, &m_video_codec, 0);
         if(m_video_stream_index == -1) {
             std::cout << "find video stream failed! " << std::endl;
             return false;
@@ -298,8 +370,8 @@ bool clz::VideoDecode::_3_match_hardware()
     auto stream = m_avformat_context->streams[m_video_stream_index];
     m_fps = av_q2d(stream->avg_frame_rate);
     auto avcodec_par = stream->codecpar;
-    auto avcodec = avcodec_find_decoder(avcodec_par->codec_id);
-    if(avcodec == NULL){
+    m_video_codec = avcodec_find_decoder(avcodec_par->codec_id);
+    if(m_video_codec == NULL){
         std::cout << "find video decoder failed! " << std::endl;
         return false;
     }
@@ -311,7 +383,7 @@ bool clz::VideoDecode::_3_match_hardware()
         type = av_hwdevice_find_type_by_name(hardware.toStdString().c_str());
         if(type == AV_HWDEVICE_TYPE_NONE) continue;
         for(int i = 0 ;; i++){
-            auto config = avcodec_get_hw_config(avcodec, i);
+            auto config = avcodec_get_hw_config(m_video_codec, i);
             if(!config) break;
 
             if(config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX && config->device_type == type){
@@ -346,7 +418,7 @@ bool clz::VideoDecode::_3_match_hardware()
 bool clz::VideoDecode::_6_alloc_pack_and_frame()
 {
     // 6, print dump infomation when exit
-    av_dump_format(m_avformat_context, 0, m_video_path.toStdString().c_str(), 0);
+    av_dump_format(m_avformat_context.get(), 0, m_video_path.toStdString().c_str(), 0);
 
     m_av_packet = av_packet_alloc();
     m_frame_in = av_frame_alloc();
@@ -427,37 +499,48 @@ bool clz::VideoDecode::_3_2_init_hardware_device_other(const QString& hardware)
 #ifdef HARDWARE_SPEED
     QByteArray hwd = hardware.toUtf8();
     enum AVHWDeviceType type = av_hwdevice_find_type_by_name(hwd.data());
-//    m_pix_format = find_fmt_by_hw_type(type);
+    m_hw_pix_format = find_fmt_by_hw_type(type);
     if(m_hw_pix_format == -1) return false;
 
     auto stream = m_avformat_context->streams[m_video_stream_index];
     auto avcodec_par = stream->codecpar;
-    auto avcodec = avcodec_find_decoder(avcodec_par->codec_id);
-    m_avcodec_context = avcodec_alloc_context3(avcodec);
-
-    m_avcodec_context->flags  |= AV_CODEC_FLAG_GLOBAL_HEADER;
-    m_avcodec_context->flags  |= AV_CODEC_FLAG_LOW_DELAY;
-    m_avcodec_context->flags2 |= AV_CODEC_FLAG2_FAST;
+    m_video_codec = avcodec_find_decoder(avcodec_par->codec_id);
+    m_avcodec_context = avcodec_alloc_context3(m_video_codec);
 
     // 4, synchronization avcodecparameters
-    avcodec_parameters_to_context(m_avcodec_context, avcodec_par);
-
+    int result = avcodec_parameters_to_context(m_avcodec_context, avcodec_par);
+    if(result < 0){
+        check_ffmpeg_error(result, 1024);
+        return false;
+    }
     m_avcodec_context->get_format = get_hw_format;
     AVBufferRef *hw_device_ref;
-    int result = av_hwdevice_ctx_create(&hw_device_ref, type, NULL, NULL, 0);
+    result = av_hwdevice_ctx_create(&hw_device_ref, type, NULL, NULL, 0);
     if(result < 0){
         check_ffmpeg_error(result, 1024);
         return false;
     }
     m_avcodec_context->hw_device_ctx = av_buffer_ref(hw_device_ref);
-//    av_buffer_unref(&hw_device_ref);
+    av_buffer_unref(&hw_device_ref);
+
+    m_avcodec_context->flags  |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    m_avcodec_context->flags  |= AV_CODEC_FLAG_LOW_DELAY;
+    m_avcodec_context->flags2 |= AV_CODEC_FLAG2_FAST;
 
     // 5, open decoder
-    int avcodec_open2_result = avcodec_open2(m_avcodec_context, avcodec, NULL);
+    int avcodec_open2_result = avcodec_open2(m_avcodec_context, m_video_codec, NULL);
     if(avcodec_open2_result != 0){
         check_ffmpeg_error(avcodec_open2_result, 1024);
         return false;
     }
+
+    m_owidth = stream->codecpar->width;
+    m_oheight = stream->codecpar->height;
+
+    if(m_owidth == 0 || m_oheight == 0){
+        return false;
+    }
+
 #endif
     return true;
 }
